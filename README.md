@@ -2,20 +2,93 @@
 
 Turn a photo of a Pakistani electricity bill (**K-Electric, LESCO, IESCO**) into structured data and plain-English answers, using Gemini for reading and Python for every calculation.
 
-![Architecture](docs/images/01_architecture.png)
-
 - **Level 1:** one JSON object per bill (provider, tariff, dates, readings, charges, taxes, payable amounts).
 - **Level 2:** plain-English answers to customer questions about each bill.
 
-## Why it works
+## Architecture
 
-**The model never does the maths.** Language models read and word things well but slip on arithmetic, so Gemini only reads the bill and writes the answer. Averages, counts, percentages and estimates come from `compute_stats()` in Python.
+### System overview
 
-![Level 2](docs/images/03_level2_hybrid.png)
+```mermaid
+flowchart TB
+    IMG[/"Bill images<br/>KE · LESCO · IESCO"/]
+    T1[/"level1 template.csv"/]
+    T2[/"level2 template.csv<br/>12 questions per bill"/]
 
-**Extraction is rule-driven and defensive.** A detailed prompt pins down how to treat credits, register readings, tax classification and privacy, and `clean()` repairs whatever still comes back wrong.
+    subgraph L1["Level 1 · Extraction"]
+        EB["extract_bill()"] --> CL["clean()<br/>fix types · CR to negative · drop zero lines"]
+    end
 
-![Level 1](docs/images/02_level1_extraction.png)
+    subgraph L2["Level 2 · Question answering"]
+        EH["extract_history()"] --> CS["compute_stats()<br/>all arithmetic in Python"] --> AQ["answer_questions()"]
+    end
+
+    G[["Google Gemini API<br/>gemini-3.1-flash-lite"]]
+
+    O1[("level1.csv")]
+    O2[("level2.csv")]
+
+    IMG --> EB
+    T1 --> EB
+    IMG --> EH
+    T2 --> AQ
+    EB <--> G
+    EH <--> G
+    AQ <--> G
+    CL --> O1
+    CL -. "bill JSON reused" .-> AQ
+    AQ --> O2
+```
+
+### Request flow for one bill
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User / CLI
+    participant M as main.py
+    participant G as Gemini API
+    participant F as CSV files
+
+    U->>M: python main.py bills/ level1.csv level2.csv output/
+    loop each bill in level1 template
+        M->>G: bill image + extraction prompt
+        G-->>M: JSON (charges, taxes, readings, dates)
+        M->>M: clean()
+    end
+    M->>F: write level1.csv
+    loop each bill in level2 template
+        M->>G: bill image + history prompt
+        G-->>M: history (month, units, amount)
+        M->>M: compute_stats()
+        M->>G: image + bill JSON + history + stats + all questions
+        G-->>M: answers (one per question id)
+    end
+    M->>F: write level2.csv
+```
+
+### Division of labour
+
+| Gemini (reading and wording) | Python (correctness) |
+|---|---|
+| Reads the bill image | `clean()`: numbers, CR credits, nulls |
+| Classifies charges and taxes | `compute_stats()`: averages, counts, percentages, estimates |
+| Reads the history table | Retries and fallback values |
+| Writes plain-English answers | `csv` module writes the files |
+
+### Error handling
+
+```mermaid
+flowchart TD
+    S([Start bill]) --> C[Call Gemini]
+    C --> OK{Valid JSON?}
+    OK -- yes --> CL[clean and store]
+    OK -- no --> R{Attempts left?}
+    R -- yes --> W[Wait 10 s] --> C
+    R -- no --> FB["Safe fallback<br/>all fields null / standard answer"]
+    CL --> D([Write CSV row])
+    FB --> D
+```
 
 ## Quick start
 
@@ -70,5 +143,5 @@ This writes `level1.csv` and `level2.csv`, keeping `bill_id`, `question_id`, `qu
 ```
 source/        main.py, requirements.txt, .env.example
 output/        sample level1.csv and level2.csv
-docs/images/   diagrams (SVG + PNG, 1200x627)
+docs/images/   presentation diagrams for sharing (SVG + PNG, 1200x627)
 ```
