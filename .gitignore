@@ -1,0 +1,8 @@
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+# bill images and templates are not committed
+test/
